@@ -5,6 +5,24 @@ def Scheduler(n_generators, n_discriminators, random_state=None, shuffle=True, s
     random_state = check_random_state(random_state)
     n_computations = 0
     i, j = 0, 0
+    if sampling == 'all_alternated':
+        while True:
+            generators = list(range(n_generators))
+            discriminators = list(range(n_discriminators))
+            upd = set()
+            use = set()
+            pairs = []
+            for G in generators:
+                for D in discriminators:
+                    pairs.append((G, D))
+                    use.add(('G', G))
+                    use.add(('D', D))
+                    if n_computations % 2 == 0:
+                        upd.add(('D', D))
+                    else:
+                        upd.add(('G', G))
+            yield pairs, use, upd, False
+            n_computations += 1
     if sampling == 'all':
         while True:
             generators = list(range(n_generators))

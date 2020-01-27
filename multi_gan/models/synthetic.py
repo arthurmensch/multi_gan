@@ -3,6 +3,7 @@ import torch.nn as nn
 
 class GeneratorSynthetic(nn.Module):
     def __init__(self, n_filters=128, depth=1, noise_dim=32):
+        super(GeneratorSynthetic, self).__init__()
         blocks = [nn.Linear(noise_dim, n_filters),
                   nn.BatchNorm1d(n_filters),
                   nn.ReLU()]
@@ -10,7 +11,7 @@ class GeneratorSynthetic(nn.Module):
             blocks += [nn.Linear(n_filters, n_filters),
                        nn.BatchNorm1d(n_filters),
                        nn.ReLU()]
-        blocks += nn.Linear(n_filters, 2)
+        blocks += [nn.Linear(n_filters, 2)]
         self.sequential = nn.Sequential(*blocks)
 
     def forward(self, input):
@@ -19,6 +20,7 @@ class GeneratorSynthetic(nn.Module):
 
 class DiscriminatorSynthetic(nn.Module):
     def __init__(self, n_filters=128, depth=1):
+        super(DiscriminatorSynthetic, self).__init__()
         blocks = [nn.Linear(2, n_filters),
                   nn.BatchNorm1d(n_filters),
                   nn.ReLU()]
@@ -26,7 +28,7 @@ class DiscriminatorSynthetic(nn.Module):
             blocks += [nn.Linear(n_filters, n_filters),
                        nn.BatchNorm1d(n_filters),
                        nn.ReLU()]
-        blocks += nn.Linear(n_filters, 1)
+        blocks += [nn.Linear(n_filters, 1)]
         self.sequential = nn.Sequential(*blocks)
 
     def forward(self, input):

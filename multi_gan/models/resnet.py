@@ -23,7 +23,8 @@
 # written by Hugo Berard (berard.hugo@gmail.com) while at Facebook.
 
 import torch.nn as nn
-from gamesrl.utils import weights_init
+
+from .dcgan import weights_init
 
 
 class ResBlock(nn.Module):

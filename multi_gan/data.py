@@ -10,7 +10,10 @@ import torchvision.datasets as dset
 def infinite_iter(generator):
     while True:
         for e in generator:
-            yield e
+            if isinstance(e, tuple):
+                yield e[0]
+            else:
+                yield e
 
 
 class GMMSampler():
@@ -72,7 +75,15 @@ def make_image_data(dataset, root=expanduser('~/data/multi_gan')):
                                    transforms.ToTensor(),
                                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                ]))
-
+        stat_path = join(root, 'stats_cifar10.npz')
+    elif dataset == 'cifar10_test':
+        dataset = dset.CIFAR10(root=root, download=True, train=False,
+                               transform=transforms.Compose([
+                                   transforms.Resize((32, 32)),
+                                   transforms.ToTensor(),
+                                   transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                               ]))
+        stat_path = join(root, 'stats_cifar10_test.npz')
     elif dataset == 'mnist':
         dataset = dset.MNIST(root=root, download=True,
                              transform=transforms.Compose([
@@ -80,11 +91,13 @@ def make_image_data(dataset, root=expanduser('~/data/multi_gan')):
                                  transforms.ToTensor(),
                                  transforms.Normalize((0.5,), (0.5,)),
                              ]))
+        stat_path = join(root, 'stats_mnist.npz')
     elif dataset == 'multimnist':
         data_dir = join(root, 'multimnist')
         images = torch.load(join(data_dir, 'images.pkl'))
         labels = torch.load(join(data_dir, 'labels.pkl'))
         dataset = TensorDataset(images, labels)
+        stat_path = join(root, 'stats_multimnist.npz')
     else:
         raise ValueError
-    return dataset
+    return dataset, stat_path

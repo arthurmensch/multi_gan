@@ -27,7 +27,7 @@ class InceptionV3(nn.Module):
         192: 1,  # Second max pooling featurs
         768: 2,  # Pre-aux classifier features
         2048: 3,  # Final average pooling features
-        1000: 4  # Logits
+        1008: 4  # Logits
     }
 
     def __init__(self,
@@ -73,7 +73,7 @@ class InceptionV3(nn.Module):
         self.output_blocks = sorted(output_blocks)
         self.last_needed_block = max(output_blocks)
 
-        assert self.last_needed_block <= 3, \
+        assert self.last_needed_block <= 4, \
             'Last possible output block index is 3'
 
         self.blocks = nn.ModuleList()
@@ -127,7 +127,6 @@ class InceptionV3(nn.Module):
 
         if self.last_needed_block >= 4:
             block4 = [
-                nn.Dropout(p=0.5),
                 # N x 2048 x 1 x 1
                 Flatten(),
                 # N x 2048

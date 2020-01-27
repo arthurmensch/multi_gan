@@ -14,9 +14,9 @@ SLURM_TEMPLATE = """#!/bin/bash
 #SBATCH --qos=qos_gpu-t3
 #SBATCH -A snt@gpu
 
-module load openmpi/4.0.2-cuda
-module load cuda/10.1.1
-module load nccl/2.4.2-1+cuda10.1
+module load openmpi/4.0.2-device
+module load device/10.1.1
+module load nccl/2.4.2-1+device10.1
 module load cudnn/10.1-v7.5.1.10
 module load anaconda-py3/2019.03
 
