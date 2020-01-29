@@ -1,3 +1,6 @@
+import os
+from os.path import join
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -195,7 +198,7 @@ def fid_inception_v3():
     inception.Mixed_7b = FIDInceptionE_1(1280)
     inception.Mixed_7c = FIDInceptionE_2(2048)
 
-    state_dict = load_state_dict_from_url(FID_WEIGHTS_URL, progress=True)
+    state_dict = torch.load(join(os.environ['WORK'], 'data', 'multi_gan', 'inception_v3'))
     inception.load_state_dict(state_dict)
     return inception
 

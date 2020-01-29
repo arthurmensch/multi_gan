@@ -1,13 +1,15 @@
+import csv
 import os
 import random
+import shutil
 from os.path import expanduser, join
 
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torchvision.utils as vutils
 from sacred import Experiment
-from sacred.observers import FileStorageObserver
 from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
@@ -21,7 +23,7 @@ from multi_gan.optimizers import ExtraOptimizer, ParamAverager
 from multi_gan.training import enable_grad_for, Scheduler
 
 exp = Experiment('multi_gan')
-exp_dir = expanduser('~/output/games_rl/multi_gan')
+exp_dir = expanduser('~/output/multi_gan')
 if not os.path.exists(exp_dir):
     os.makedirs(exp_dir)
 
@@ -47,8 +49,6 @@ def synthetic():
     G_lr = 1e-5
     mirror_lr = 0
 
-    ndf = 512
-    ngf = 512
     grad_penalty = 10
 
     sampling = 'player'
@@ -59,12 +59,17 @@ def synthetic():
     print_every = 500
     eval_device = 'cuda:0'
     eval_fid = False
+    restart = True
+
+    fused_noise = True
+    depth = 1
+
 
 @exp.named_config
 def cifar():
     data_type = 'image'
     data_source = 'cifar10'
-    n_generators = 5
+    n_generators = 3
     n_discriminators = 3
 
     depth = 1
@@ -82,36 +87,82 @@ def cifar():
     G_lr = 3e-5
     mirror_lr = 0
 
-    ndf = 128
-    ngf = 128
     grad_penalty = 10
 
     sampling = 'all'
+    fused_noise = True
 
     seed = 0
-    print_every = 10000
 
     eval_fid = True
+    print_every = 10000
     eval_every = 10000
     eval_device = 'cuda:0'
 
+    restart = True
+    output_dir = expanduser('~/output')
+
+
+@exp.named_config
+def mnist():
+    data_type = 'image'
+    data_source = 'mnist'
+    n_generators = 3
+    n_discriminators = 3
+
+    depth = 1
+    ndf = 128
+    ngf = 128
+
+    loss_type = 'wgan-gp'
+    device = 'cuda:0'
+    n_iter = int(5e4)
+
+    noise_dim = 128  # For image data
+
+    batch_size = 64
+    D_lr = 1e-3
+    G_lr = 1e-4
+    mirror_lr = 0
+
+    grad_penalty = 10
+
+    sampling = 'all'
+    fused_noise = True
+
+    seed = 0
+
+    eval_fid = False
+    print_every = 100
+    eval_every = 100
+    eval_device = 'cuda:0'
+
+    restart = True
+    output_dir = expanduser('~/output/multi_gan/mnist')
+
 
 @exp.main
-def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sampling, mirror_lr,
-          data_type, data_source, depth, print_every, eval_device, eval_fid,
+def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sampling, mirror_lr, restart,
+          output_dir, data_type, data_source, depth, print_every, eval_device, eval_fid, fused_noise,
           device, batch_size, n_iter, loss_type, eval_every, D_lr, G_lr, _seed, _run):
     torch.random.manual_seed(_seed)
     np.random.seed(_seed)
     random.seed(_seed)
 
+    output_dir = output_dir.replace('$WORK', os.environ['WORK'])
+
     if not torch.cuda.is_available():
         device = 'cpu'
 
-    artifact_dir = join(_run.observers[0].dir, 'artifacts')
-    if not os.path.exists(artifact_dir):
-        os.makedirs(artifact_dir)
+    if output_dir is None:
+        output_dir = join(_run.observers[0].dir, 'artifacts')
+    else:
+        output_dir = output_dir
 
-    writer = SummaryWriter(log_dir=artifact_dir)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    writer = SummaryWriter(log_dir=output_dir)
 
     if data_type == 'synthetic':
         if data_source == '8gmm':
@@ -163,7 +214,6 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
         for player in these_players.values():
             player.train()
 
-
     averagers = {group: {i: ParamAverager(player) for i, player in these_players.items()}
                  for group, these_players in players.items()}
     optimizers = {group: {i: ExtraOptimizer(Adam(player.parameters(),
@@ -173,12 +223,11 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
 
     weights = {'G': torch.full((n_generators,), fill_value=1 / n_generators, device=device),
                'D': torch.full((n_discriminators,), fill_value=1 / n_discriminators, device=device)}
-    past_losses = {'G': torch.zeros((n_generators, n_discriminators), device=device),
+    losses = {'G': torch.zeros((n_generators, n_discriminators), device=device),
                    'D': torch.zeros((n_discriminators, n_generators), device=device)}
-    count_losses = {'G': torch.zeros((n_generators, n_discriminators), device=device),
+    counts = {'G': torch.zeros((n_generators, n_discriminators), device=device),
                     'D': torch.zeros((n_discriminators, n_generators), device=device)}
-    last_losses = {group: {i: None for i, player in these_players.items()} for group, these_players in players.items()}
-
+    last_losses = {'G': None, 'D': None}
     fixed_data = next(data_loader)[0].to('cpu')
 
     if data_type == 'synthetic':
@@ -190,92 +239,138 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
         fixed_noise = torch.randn(10000, noise_dim).to(device)
         noise_loader = DataLoader(TensorDataset(fixed_noise), batch_size=batch_size)
         true_loglike = None
-        img_folder = join(artifact_dir, 'imgs')
-        if not os.path.exists(img_folder):
+        img_folder = join(output_dir, 'imgs')
+        try:
             os.makedirs(img_folder)
-
-    n_computations = 0
+        except:
+            pass
 
     scheduler = Scheduler(n_generators, n_discriminators, sampling=sampling)
+
+    n_gen_upd, n_steps, n_data, n_noise = 0, 0, 0, 0
     next_print_step = 0
     next_eval_step = 0
 
-    while n_computations < n_iter:
-        for G, generator in players['G'].items():
-            generator.train()
-        losses = {group: {i: None for i, player in these_players.items()} for group, these_players in players.items()}
-        pairs, use, upd, extrapolate = next(scheduler)
-        enable_grad_for(players, upd)
-        fake_data, true_logits, true_data = {}, {}, {}
-        for G, generator in players['G'].items():
-            if ('G', G) in use:
-                noise = torch.randn(batch_size, noise_dim, device=device)
-                fake_data[G] = generator(noise)
-        for D, discriminator in players['D'].items():
-            if ('D', D) in use:
-                true_data[D] = next(data_loader)[0].to(device)
-                true_logits[D] = discriminator(true_data[D])
-
-        for (G, D) in pairs:
-            fake_logits = players['D'][D](fake_data[G])  # the coup;ing term
-            this_loss = compute_gan_loss(true_logits=true_logits[D],
-                                         fake_logits=fake_logits,
-                                         loss_type=loss_type)
-            for group, adv_group, P, A in [('D', 'G', D, G), ('G', 'D', G, D)]:
-                if (group, P) in upd:
-                    if group == 'D':
-                        if loss_type == 'wgan-gp':
-                            this_loss[group] += grad_penalty * compute_grad_penalty(players['D'][D], true_data[D],
-                                                                                    fake_data[G])
-                    loss = this_loss[group] * weights[adv_group][A]
-                    if losses[group][P] is not None:
-                        losses[group][P] = losses[group][P] + loss
-                    else:
-                        losses[group][P] = loss
-                    past_losses[group][P, A] += loss.item()
-                    count_losses[group][P, A] += 1
-
+    if 'checkpoint' in os.listdir(output_dir) and restart:
+        for name in ['checkpoint', 'last_checkpoint']:
+            try:
+                checkpoint = torch.load(join(output_dir, name))
+                bundle = joblib.load(join(output_dir, f'{name}_bundle'))
+                break
+            except EOFError:
+                print(f'Cannot open {checkpoint}')
+                continue
+        print(f'Restarting from {join(output_dir, name)}')
+        n_gen_upd = checkpoint['n_gen_upd']
+        n_steps = checkpoint['n_steps']
+        n_data = checkpoint['n_data']
+        n_noise = checkpoint['n_noise']
+        next_print_step = checkpoint['next_print_step']
+        next_eval_step = checkpoint['next_eval_step']
         for group, these_players in players.items():
             for P, player in these_players.items():
-                if losses[group][P] is not None:
-                    last_losses[group][P] = losses[group][P].item()
+                players[group][P].load_state_dict(checkpoint['players'][group][P])
+                optimizers[group][P].load_state_dict(checkpoint['optimizers'][group][P])
+                averagers[group][P].load_state_dict(checkpoint['averagers'][group][P])
+            weights[group] = checkpoint['weights'][group]
+            losses[group] = checkpoint['past_losses'][group]
+            counts[group] = checkpoint['count_losses'][group]
+        scheduler = bundle['scheduler']
+
+    while n_gen_upd < n_iter:
+        for group, these_players in players.items():
+            for P, player in these_players.items():
+                player.train()
+                optimizers[group][P].zero_grad()
+
+        pairs, use, upd, extrapolate = next(scheduler)
+        enable_grad_for(players, upd)
+
+        fake_data_dict, true_logits_dict, true_data_dict = {}, {}, {}
+        if fused_noise:
+            for D, discriminator in players['D'].items():
+                if ('D', D) in use:
+                    true_data_dict[D] = next(data_loader)[0].to(device)
+                    n_data += 1
+                    true_logits_dict[D] = discriminator(true_data_dict[D])
+
+            for G, generator in players['G'].items():
+                if ('G', G) in use:
+                    noise = torch.randn(batch_size, noise_dim, device=device)
+                    n_noise += 1
+                    fake_data_dict[G] = generator(noise)
+        for (G, D) in pairs:
+            enable_grad_for(players, {('D', D), ('G', G)})
+            if fused_noise:
+                true_data = true_data_dict[D]
+                true_logits = true_logits_dict[D]
+                fake_data = fake_data_dict[G]
+            else:
+                true_data = next(data_loader)[0].to(device)
+                n_data += 1
+                true_logits = players['D'][D](true_data)
+                noise = torch.randn(batch_size, noise_dim, device=device)
+                n_noise += 1
+                fake_data = players['G'][G](noise)
+
+            fake_logits = players['D'][D](fake_data)  # the coupling term
+            this_loss = compute_gan_loss(true_logits=true_logits,
+                                         fake_logits=fake_logits,
+                                         loss_type=loss_type)
+            if loss_type == 'wgan-gp':
+                this_loss['D'] = this_loss['D'] + \
+                                 grad_penalty * compute_grad_penalty(players['D'][D], true_data, fake_data)
+            # Compute gradients
+            for group, adv_group, P, A in [('D', 'G', D, G), ('G', 'D', G, D)]:
+                if (group, P) in upd:
                     enable_grad_for(players, {(group, P), })
-                    optimizers[group][P].zero_grad()
-                    losses[group][P].backward(retain_graph=True)
+                    loss = this_loss[group] * weights[adv_group][A]
+                    enable_grad_for(players, {(group, P)})
+                    loss.backward(retain_graph=True)
+                    losses[group][P, A] += loss.item()
+                    counts[group][P, A] += 1
+        # Steps
+        for group, these_players in players.items():
+            for P, player in these_players.items():
+                if (group, P) in upd:
                     optimizers[group][P].step(extrapolate=extrapolate)
+                    n_steps += 1
+                    # print(f'{"e" if extrapolate else "u"}{group}{P}')
                     if group == 'D' and loss_type == 'wgan':
                         for p in player.parameters():
                             p.data.clamp_(-5, 5)
-                    if not extrapolate:
-                        if group == 'G':
-                            n_computations += 1
+                    if not extrapolate and group == 'G':
+                        n_gen_upd += 1
                         averagers[group][P].step()
 
-        if not extrapolate:
+        if not extrapolate:  # deextrapolate everyone in case of update
             for group, these_optimizers in optimizers.items():
                 for P, optimizer in these_optimizers.items():
                     optimizer.deextrapolate()
 
-        for group, count_loss in count_losses.items():
-            if torch.all(count_loss >= 1):
-                mean_loss = past_losses[group] / count_loss
-                weights[group] *= torch.exp(-mirror_lr * torch.sum(mean_loss, dim=1))
+        for group in losses:
+            if torch.all(counts[group] >= 1):  # will be true or false for both groups
+                sum_losses = torch.sum(losses[group] / counts[group], dim=1)
+                weights[group] *= torch.exp(-mirror_lr * sum_losses)
                 weights[group] /= weights[group].sum()
-                past_losses[group][:] = 0
-                count_losses[group][:] = 0
 
-        if n_computations >= next_print_step:
+                last_losses[group] = {str(P): loss for P, loss in enumerate(sum_losses)}
+
+                losses[group][:] = 0
+                counts[group][:] = 0
+
+        if n_gen_upd >= next_print_step:
             next_print_step += print_every
-            string = f'iter:{n_computations} '
+            metrics = {}
+            string = f'{n_gen_upd} G_upd / {n_steps} steps / {n_noise} noise / {n_data} data '
             for group, these_losses in last_losses.items():
-                for P, loss in these_losses.items():
-                    if loss is None:
-                        loss = float('nan')
-                    weight = weights[group][P]
-                    writer.add_scalar(f'loss/loss_{group}{P}', loss, global_step=n_computations)
-                    writer.add_scalar(f'weights/{group}{P}', weight, global_step=n_computations)
-                    string += f'loss_{group}{P}={loss:.2f} (w={weight:.2f}) '
-            if n_computations >= next_eval_step:
+                if these_losses is not None:
+                    metrics[f'training/loss_{group}'] = sum(these_losses.values())
+                    # writer.add_scalars(f'training/losses_{group}', these_losses, n_gen_upd)
+                    # writer.add_scalars(f'training/weights_{group}',
+                    #                    {str(P): weight for P, weight in enumerate(weights[group])}, n_gen_upd)
+
+            if n_gen_upd >= next_eval_step:
                 next_eval_step += eval_every
 
                 for G, generator in players['G'].items():
@@ -296,11 +391,9 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                                 fake_points[selection == G] = generator(fixed_noise[selection == G]).cpu()
                         ax.scatter(fake_points[selection == G][:, 0], fake_points[selection == G][:, 1], label=G, alpha=.5)
                     ax.legend(loc='lower left')
-                    writer.add_figure(f'generated/2d', fig, global_step=n_computations)
+                    writer.add_figure(f'generated/2d', fig, global_step=n_gen_upd)
                     plt.close(fig)
-                    log_prob = true_loglike - sampler.log_prob(fake_points).mean().item()
-                    writer.add_scalar(f'loss/log_prob', log_prob, global_step=n_computations)
-                    string += f'log_prob={log_prob:.2f} '
+                    metrics['eval/log_prob'] = true_loglike - sampler.log_prob(fake_points).mean().item()
 
                 else:  # data_type == 'image'
                     for G, generator in players['G'].items():
@@ -310,7 +403,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                         if data_source == 'multimnist':
                             fake_images = torch.cat([fake_images[:, [i]] for i in range(fake_images.shape[1])], dim=2)
                         grid = vutils.make_grid(fake_images, normalize=True)
-                        writer.add_image(f'generated/{G}', grid, global_step=n_computations)
+                        writer.add_image(f'generated/{G}', grid, global_step=n_gen_upd)
                     if eval_fid:
                             paths = []
                             p = weights['G'].cpu().numpy()
@@ -324,14 +417,55 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                                         paths.append(path)
                             fid, is_m, is_std = calculate_fid_given_paths([img_folder, stat_path], batch_size=50,
                                                                           device=eval_device, dims=2048)
-                            writer.add_scalar(f'loss/fid', fid, global_step=n_computations)
-                            writer.add_scalar(f'loss/is_m', fid, global_step=n_computations)
-                            string += f'fid: {fid:.2f}, is: {is_m:.2f}'
+                            metrics['eval/fid'] = fid
+                            metrics['eval/is'] = is_m
+                            metrics['eval/is_std'] = is_std
+
+                for key, value in metrics.items():
+                    writer.add_scalar(key, value, n_gen_upd)
+                    string += f'{key}: {value:.2f} '
+
+                filename = join(output_dir, 'results.csv')
+                if not os.path.exists(filename):
+                    with open(filename, 'w+', newline='') as csvfile:
+                        csv_writer = csv.DictWriter(csvfile, fieldnames=metrics.keys())
+                        csv_writer.writeheader()
+                with open(filename, 'a', newline='') as csvfile:
+                    csv_writer = csv.DictWriter(csvfile, fieldnames=metrics.keys())
+                    csv_writer.writerow(metrics)
+
+                checkpoint = {}
+                checkpoint['n_gen_upd'] = n_gen_upd
+                checkpoint['next_print_step'] = next_print_step
+                checkpoint['next_eval_step'] = next_eval_step
+                checkpoint['n_steps'] = n_steps
+                checkpoint['n_data'] = n_data
+                checkpoint['n_noise'] = n_noise
+                checkpoint['players'] = {}
+                checkpoint['optimizers'] = {}
+                checkpoint['averagers'] = {}
+                checkpoint['weights'] = {}
+                checkpoint['past_losses'] = {}
+                checkpoint['count_losses'] = {}
+                for group, these_players in players.items():
+                    checkpoint['players'][group] = {}
+                    checkpoint['optimizers'][group] = {}
+                    checkpoint['averagers'][group] = {}
+                    for P, player in these_players.items():
+                        checkpoint['players'][group][P] = players[group][P].state_dict()
+                        checkpoint['optimizers'][group][P] = optimizers[group][P].state_dict()
+                        checkpoint['averagers'][group][P] = averagers[group][P].state_dict()
+                    checkpoint['weights'][group] = weights[group].cpu()
+                    checkpoint['past_losses'][group] = losses[group].cpu()
+                    checkpoint['count_losses'][group] = counts[group].cpu()
+                if os.path.exists('checkpoint'):
+                    os.rename(join(output_dir, 'checkpoint'), join(output_dir, 'last_checkpoint'))
+                    os.rename(join(output_dir, 'checkpoint_bundle'), join(output_dir, 'last_checkpoint_bundle'))
+                torch.save(checkpoint, join(output_dir, 'checkpoint'))
+                joblib.dump({'scheduler': scheduler}, join(output_dir, 'checkpoint_bundle'))
+
             print(string)
 
 
 if __name__ == '__main__':
-    if not os.path.exists(exp_dir):
-        os.makedirs(exp_dir)
-    exp.observers = [FileStorageObserver(exp_dir)]
     exp.run_commandline()

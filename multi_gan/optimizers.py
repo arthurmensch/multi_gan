@@ -1,7 +1,10 @@
 import copy
 from collections import defaultdict
+from itertools import chain
 
+import torch
 from torch import nn
+from torch._six import container_abcs
 from torch.optim.optimizer import Optimizer
 
 
@@ -34,23 +37,78 @@ class ExtraOptimizer:
                     p.data.copy_(self.extra_state[p]['backup'])
 
     def state_dict(self):
-        for group in self.param_groups:
-            for p in group['params']:
-                for key in self.extra_state[p]:
-                    self.optimizer.state[p][key] = self.extra_state[p][key]
-        state_dict = self.optimizer.state_dict()
-        for group in self.param_groups:
-            for p in group['params']:
-                for key in self.extra_state[p]:
-                    self.optimizer.state[p].pop(key)
-        return state_dict
+        # Copied from pytorch code
+
+        # Save ids instead of Tensors
+        def pack_group(group):
+            packed = {k: v for k, v in group.items() if k != 'params'}
+            packed['params'] = [id(p) for p in group['params']]
+            return packed
+        param_groups = [pack_group(g) for g in self.param_groups]
+        # Remap state to use ids as keys
+        packed_state = {(id(k) if isinstance(k, torch.Tensor) else k): v
+                        for k, v in self.extra_state.items()}
+        extra = {
+            'state': packed_state,
+            'param_groups': param_groups,
+        }
+        return dict(optimizer=self.optimizer.state_dict(), extrapolated=self.extrapolated, extra=extra)
 
     def load_state_dict(self, state_dict):
-        self.optimizer.load_state_dict(state_dict)
-        for group in self.param_groups:
-            for p in group['params']:
-                for key in self.extra_state[p]:
-                    self.extra_state[p][key] = self.optimizer.state[p].pop(key)
+        self.optimizer.load_state_dict(state_dict['optimizer'])
+        self.extrapolated = state_dict['extrapolated']
+
+        # Copied from pytorch code
+
+        # deepcopy, to be consistent with module API
+        state_dict = state_dict['extra']
+        state_dict = copy.deepcopy(state_dict)
+        # Validate the state_dict
+        groups = self.param_groups
+        saved_groups = state_dict['param_groups']
+
+        if len(groups) != len(saved_groups):
+            raise ValueError("loaded state dict has a different number of "
+                             "parameter groups")
+        param_lens = (len(g['params']) for g in groups)
+        saved_lens = (len(g['params']) for g in saved_groups)
+        if any(p_len != s_len for p_len, s_len in zip(param_lens, saved_lens)):
+            raise ValueError("loaded state dict contains a parameter group "
+                             "that doesn't match the size of optimizer's group")
+
+        # Update the state
+        id_map = {old_id: p for old_id, p in
+                  zip(chain(*(g['params'] for g in saved_groups)),
+                      chain(*(g['params'] for g in groups)))}
+
+        def cast(param, value):
+            r"""Make a deep copy of value, casting all tensors to device of param."""
+            if isinstance(value, torch.Tensor):
+                # Floating-point types are a bit special here. They are the only ones
+                # that are assumed to always match the type of params.
+                if param.is_floating_point():
+                    value = value.to(param.dtype)
+                value = value.to(param.device)
+                return value
+            elif isinstance(value, dict):
+                return {k: cast(param, v) for k, v in value.items()}
+            elif isinstance(value, container_abcs.Iterable):
+                return type(value)(cast(param, v) for v in value)
+            else:
+                return value
+
+        # Copy state assigned to params (and cast tensors to appropriate types).
+        # State that is not assigned to params is copied as is (needed for
+        # backward compatibility).
+        state = defaultdict(dict)
+        for k, v in state_dict['state'].items():
+            if k in id_map:
+                param = id_map[k]
+                state[param] = cast(param, v)
+            else:
+                state[k] = v
+
+        self.extra_state = state
 
     def zero_grad(self):
         self.optimizer.zero_grad()
