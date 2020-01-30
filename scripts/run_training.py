@@ -248,8 +248,8 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     scheduler = Scheduler(n_generators, n_discriminators, sampling=sampling)
 
     n_gen_upd, n_steps, n_data, n_noise = 0, 0, 0, 0
-    next_print_step = 0
-    next_eval_step = 0
+    next_print_step = eval_every
+    next_eval_step = eval_every
 
     if 'checkpoint' in os.listdir(output_dir) and restart:
         for name in ['checkpoint', 'last_checkpoint']:
@@ -365,7 +365,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             string = f'{n_gen_upd} G_upd / {n_steps} steps / {n_noise} noise / {n_data} data '
             for group, these_losses in last_losses.items():
                 if these_losses is not None:
-                    metrics[f'training/loss_{group}'] = sum(these_losses.values())
+                    metrics[f'training/loss_{group}'] = sum(these_losses.values()).item()
                     # writer.add_scalars(f'training/losses_{group}', these_losses, n_gen_upd)
                     # writer.add_scalars(f'training/weights_{group}',
                     #                    {str(P): weight for P, weight in enumerate(weights[group])}, n_gen_upd)

@@ -68,7 +68,7 @@ for i, parameter in enumerate(parameters):
     output_dir = join(basedir, str(i))
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    job_file = os.path.join(output_dir, f"job.slurm")
+    job_file = os.path.join(output_dir, "job.slurm")
     parameters_str = 'cifar output_dir={} '.format(output_dir)
     for key in parameter:
         parameters_str += "{}={} ".format(key, parameter[key])
