@@ -132,7 +132,7 @@ def mnist():
 
     seed = 0
 
-    eval_fid = False
+    eval_fid = True
     print_every = 100
     eval_every = 100
     eval_device = 'cuda:0'
@@ -234,22 +234,16 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
         fixed_noise = torch.randn(512, noise_dim).to(device)
         noise_loader = None
         true_loglike = sampler.log_prob(fixed_data).mean().item()
-        img_folder = None
     else:
         fixed_noise = torch.randn(10000, noise_dim).to(device)
         noise_loader = DataLoader(TensorDataset(fixed_noise), batch_size=batch_size)
         true_loglike = None
-        img_folder = join(output_dir, 'imgs')
-        try:
-            os.makedirs(img_folder)
-        except:
-            pass
 
     scheduler = Scheduler(n_generators, n_discriminators, sampling=sampling)
 
     n_gen_upd, n_steps, n_data, n_noise = 0, 0, 0, 0
-    next_print_step = eval_every
-    next_eval_step = eval_every
+    next_print_step = 0
+    next_eval_step = 0
 
     if 'checkpoint' in os.listdir(output_dir) and restart:
         for name in ['checkpoint', 'last_checkpoint']:
@@ -366,9 +360,10 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             for group, these_losses in last_losses.items():
                 if these_losses is not None:
                     metrics[f'training/loss_{group}'] = sum(these_losses.values()).item()
-                    # writer.add_scalars(f'training/losses_{group}', these_losses, n_gen_upd)
-                    # writer.add_scalars(f'training/weights_{group}',
-                    #                    {str(P): weight for P, weight in enumerate(weights[group])}, n_gen_upd)
+                    for P, weight in enumerate(weights[group]):
+                        writer.add_scalar(f'weights/{group}{P}', weight, n_gen_upd)
+                else:
+                    metrics[f'training/loss_{group}'] = float('nan')
 
             if n_gen_upd >= next_eval_step:
                 next_eval_step += eval_every
@@ -405,21 +400,22 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                         grid = vutils.make_grid(fake_images, normalize=True)
                         writer.add_image(f'generated/{G}', grid, global_step=n_gen_upd)
                     if eval_fid:
-                            paths = []
-                            p = weights['G'].cpu().numpy()
-                            for (noise, ) in noise_loader:
-                                with torch.no_grad():
-                                    G = np.random.choice(n_generators, p=p)
-                                    images = ((players['G'][G](noise) + 1) / 2).cpu()
-                                    for image in images:
-                                        path = join(img_folder, f'img_{len(paths)}.png')
-                                        vutils.save_image(image, path)
-                                        paths.append(path)
-                            fid, is_m, is_std = calculate_fid_given_paths([img_folder, stat_path], batch_size=50,
-                                                                          device=eval_device, dims=2048)
-                            metrics['eval/fid'] = fid
-                            metrics['eval/is'] = is_m
-                            metrics['eval/is_std'] = is_std
+                        fake_images = players['G'][0](fixed_noise[:1])  # get shape
+                        dataset = torch.zeros((len(fixed_noise), 3, *fake_images.shape[2:]), dtype=torch.float32)
+                        p = weights['G'].cpu().numpy()
+                        bb, be = 0, 0
+                        for (noise, ) in noise_loader:
+                            G = np.random.choice(n_generators, p=p)
+                            be += len(noise)
+                            with torch.no_grad():
+                                dataset[bb:be, :].copy_(((players['G'][G](noise) + 1) / 2))
+                            bb = be
+                        dataset = TensorDataset(dataset)
+                        fid, is_m, is_std = calculate_fid_given_paths([dataset, stat_path], batch_size=50,
+                                                                      device=eval_device, dims=2048)
+                        metrics['eval/fid'] = fid
+                        metrics['eval/is'] = is_m
+                        metrics['eval/is_std'] = is_std
 
                 for key, value in metrics.items():
                     writer.add_scalar(key, value, n_gen_upd)

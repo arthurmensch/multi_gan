@@ -12,7 +12,8 @@ SLURM_TEMPLATE = """#!/bin/bash
 #SBATCH --output={workdir}/output/multi_gan/run_%j.out
 #SBATCH --error={workdir}/output/multi_gan/run_%j.err
 #SBATCH --qos=qos_gpu-t3
-#SBATCH -A snt@gpu
+#SBATCH --signal=B:SIGUSR1@120
+#SBATCH --account=snt@gpu
 
 sig_handler_USR1()
 {{
@@ -42,27 +43,52 @@ python {workdir}/work/repos/multi_gan/scripts/run_training.py with {parameters} 
 
 workdir = os.environ['WORK']
 script_file = os.path.join(workdir, 'work/repos/multi_gan/run_training.py')
-basedir = os.path.join(workdir, 'output/multi_gan/cifar10')
+basedir = os.path.join(workdir, 'output/multi_gan/cifar10_final')
+grid = 'final'
 
+if not os.path.exists(basedir):
+    os.makedirs(basedir)
 
-i = 0
-parameters = []
-for n_generators in [1, 3, 5]:
-    for n_discriminators in [1, 3]:
-        for sampling in ['all', 'pair']:
-            parameters.append(dict(n_generators=n_generators,
-                                   n_discriminators=n_discriminators,
-                                   mirror_lr=0, sampling=sampling))
-            if n_generators > 1 or n_generators > 1 and sampling == 'all':
+if grid == 'preliminary':
+    i = 0
+    parameters = []
+    for n_generators in [1, 3, 5]:
+        for n_discriminators in [1, 3]:
+            for sampling in ['all', 'pair']:
                 parameters.append(dict(n_generators=n_generators,
                                        n_discriminators=n_discriminators,
-                                       mirror_lr=1e-2, sampling=sampling))
-parameters.append(dict(n_generators=4, noise_dim=32,
-                       n_discriminators=1,
-                       mirror_lr=0, sampling='all'))
-parameters.append(dict(n_generators=3,
-                       n_discriminators=3,
-                       mirror_lr=0, sampling='all', fused_noise=False))
+                                       mirror_lr=0, sampling=sampling))
+                if n_generators > 1 or n_generators > 1 and sampling == 'all':
+                    parameters.append(dict(n_generators=n_generators,
+                                           n_discriminators=n_discriminators,
+                                           mirror_lr=1e-2, sampling=sampling))
+    parameters.append(dict(n_generators=4, noise_dim=32,
+                           n_discriminators=1,
+                           mirror_lr=0, sampling='all'))
+    parameters.append(dict(n_generators=3,
+                           n_discriminators=3,
+                           mirror_lr=0, sampling='all', fused_noise=False))
+elif grid == 'final':
+    i = 0
+    parameters = []
+    for seed in [100, 200, 300, 400]:
+        for lr in [1e-5, 5e-5]:
+            for nG, nD in [(1, 1,), (5, 1), (5, 2)]:
+                parameters.append(dict(n_generators=nG,
+                                       n_discriminators=nD,
+                                       D_lr=10 * lr, G_lr=lr,
+                                       mirror_lr=0, sampling='pair',
+                                       seed=seed))
+            parameters.append(dict(n_generators=5,
+                                   n_discriminators=2,
+                                   D_lr=10 * lr, G_lr=lr,
+                                   mirror_lr=2e-2, sampling='pair', seed=seed))
+            parameters.append(dict(n_generators=5,
+                                   n_discriminators=2,
+                                   D_lr=10 * lr, G_lr=lr,
+                                   mirror_lr=0, sampling='all',
+                                   seed=seed))
+
 
 for i, parameter in enumerate(parameters):
     output_dir = join(basedir, str(i))

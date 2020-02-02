@@ -25,7 +25,7 @@ class ImagesPathDataset(Dataset):
         img = Image.open(path).convert('RGB')
         if self.transforms is not None:
             img = self.transforms(img)
-        return img
+        return img,
 
 
 try:
@@ -82,7 +82,10 @@ def get_activations(files, model, batch_size=50, dims=2048,
                'Setting batch size to data size'))
         batch_size = len(files)
 
-    ds = ImagesPathDataset(files, transforms=TF.ToTensor())
+    if isinstance(files, Dataset):
+        ds = files
+    else:
+        ds = ImagesPathDataset(files, transforms=TF.ToTensor())
     dl = DataLoader(ds, batch_size=batch_size, drop_last=True,
                     num_workers=2 * cpu_count(), pin_memory=True)
 
@@ -92,7 +95,7 @@ def get_activations(files, model, batch_size=50, dims=2048,
     pred_arr = np.empty((n_used_imgs, dims))
     prob_arr = np.empty((n_used_imgs, 1000))
 
-    for i, batch in enumerate(tqdm(dl)):
+    for i, (batch, ) in enumerate(tqdm(dl)):
         if verbose:
             print('\rPropagating batch %d/%d' % (i + 1, n_batches),
                   end='', flush=True)
@@ -203,7 +206,10 @@ def calculate_activation_statistics(files, model, batch_size=50,
 
 
 def _compute_statistics_of_path(path, model, batch_size, dims, device):
-    if path.endswith('.npz'):
+    if isinstance(path, Dataset):
+        m, s, prob = calculate_activation_statistics(path, model, batch_size,
+                                                     dims, device)
+    elif path.endswith('.npz'):
         f = np.load(path)
         m, s = f['mu'][:], f['sigma'][:]
         prob = f['is_mean'], f['is_std']
@@ -230,8 +236,9 @@ def calculate_inception_score(prob, splits=10):
 def calculate_fid_given_paths(paths, batch_size, device, dims):
     """Calculates the FID of two paths"""
     for p in paths:
-        if not os.path.exists(p):
-            raise RuntimeError('Invalid path: %s' % p)
+        if not isinstance(p, Dataset):
+            if not os.path.exists(p):
+                raise RuntimeError('Invalid path: %s' % p)
 
     block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[dims]
 
