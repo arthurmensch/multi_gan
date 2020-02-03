@@ -32,13 +32,13 @@ def synthetic():
     data_type = 'synthetic'
     data_source = '8gmm'
 
-    n_generators = 1
+    n_generators = 3
     n_discriminators = 1
 
-    depth = 1
+    depth = 3
 
-    ndf = 512 // n_discriminators
-    ngf = 512 // n_generators
+    ndf = 512
+    ngf = 512
 
     loss_type = 'wgan'
     device = 'cuda:0'
@@ -47,13 +47,13 @@ def synthetic():
     noise_dim = 32
 
     batch_size = 512
-    D_lr = 5e-4
-    G_lr = 5e-5
+    D_lr = 1e-4
+    G_lr = 1e-5
     mirror_lr = 0
 
     grad_penalty = 10
 
-    sampling = 'all'
+    sampling = 'all_extra'
     fused_noise = True
 
     seed = 100
@@ -90,7 +90,7 @@ def cifar():
 
     grad_penalty = 10
 
-    sampling = 'all'
+    sampling = 'all_alternated'
     fused_noise = True
 
     seed = 0
@@ -279,6 +279,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                 optimizers[group][P].zero_grad()
 
         pairs, use, upd, extrapolate = next(scheduler)
+        # print(pairs, use, upd, extrapolate)
         enable_grad_for(players, upd)
 
         fake_data_dict, true_logits_dict, true_data_dict = {}, {}, {}
@@ -331,7 +332,6 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                 if (group, P) in upd:
                     optimizers[group][P].step(extrapolate=extrapolate)
                     n_steps += 1
-                    # print(f'{"e" if extrapolate else "u"}{group}{P}')
                     if group == 'D' and loss_type == 'wgan':
                         for p in player.parameters():
                             p.data.clamp_(-5, 5)
@@ -370,8 +370,8 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             if n_gen_upd >= next_eval_step:
                 next_eval_step += eval_every
 
-                for G, generator in players['G'].items():
-                    generator.eval()
+                # for G, generator in players['G'].items():
+                #     generator.eval()
                 if data_type == 'synthetic':
                     fig, ax = plt.subplots(1, 1)
                     ax.scatter(fixed_data[:, 0], fixed_data[:, 1], label='True', marker='v',

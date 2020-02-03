@@ -13,7 +13,7 @@ SLURM_TEMPLATE = """#!/bin/bash
 #SBATCH --error={workdir}/output/multi_gan/run_%j.err
 #SBATCH --qos=qos_gpu-t3
 #SBATCH --signal=B:SIGUSR1@120
-#SBATCH --account=snt@gpu
+#SBATCH --account=glp@gpu
 
 sig_handler_USR1()
 {{
@@ -77,7 +77,7 @@ elif grid == 'final_mixed_nash':
                 parameters.append(dict(n_generators=nG,
                                        n_discriminators=nD,
                                        D_lr=10 * lr, G_lr=lr,
-                                       mirror_lr=0, sampling='all',
+                                       mirror_lr=0, sampling='all_extra',
                                        seed=seed))
             for nG, nD in [(3, 3)]:
                 for mirror_lr in [0., 2e-2]:
@@ -85,14 +85,13 @@ elif grid == 'final_mixed_nash':
                                            n_discriminators=nD,
                                            D_lr=10 * lr, G_lr=lr,
                                            n_iter=5e5 * nG,
-                                           mirror_lr=mirror_lr, sampling='all',
-                                           fused_noise=False,
+                                           mirror_lr=mirror_lr, sampling='all_extra',
                                            seed=seed))
                     parameters.append(dict(n_generators=nG,
                                            n_discriminators=nD,
                                            D_lr=10 * lr, G_lr=lr,
                                            n_iter=5e5 * nG,
-                                           mirror_lr=mirror_lr, sampling='pair',
+                                           mirror_lr=mirror_lr, sampling='pair_extra',
                                            seed=seed))
 elif grid == 'nplayer':
     i = 0
