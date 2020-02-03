@@ -14,7 +14,7 @@ from multi_gan.eval.fid_score import calculate_fid_given_paths
 from multi_gan.losses import compute_gan_loss, compute_grad_penalty
 from multi_gan.models import GeneratorDCGAN28, DiscriminatorDCGAN28, GeneratorSynthetic, GeneratorResNet32, \
     DiscriminatorSynthetic, DiscriminatorResNet32
-from multi_gan.optimizers import ExtraOptimizer, ParamAverager
+from multi_gan.optimizers import ExtraOptimizer
 from multi_gan.training import enable_grad_for, Scheduler
 from sacred import Experiment
 from torch.optim import Adam
@@ -32,10 +32,10 @@ def synthetic():
     data_type = 'synthetic'
     data_source = '8gmm'
 
-    n_generators = 3
-    n_discriminators = 1
+    n_generators = 5
+    n_discriminators = 5
 
-    depth = 3
+    depth = 1
 
     ndf = 512
     ngf = 512
@@ -47,13 +47,13 @@ def synthetic():
     noise_dim = 32
 
     batch_size = 512
-    D_lr = 1e-4
-    G_lr = 1e-5
+    D_lr = 1e-3
+    G_lr = 1e-4
     mirror_lr = 0
 
     grad_penalty = 10
 
-    sampling = 'all_extra'
+    sampling = 'all_extra_alter'
     fused_noise = True
 
     seed = 100
@@ -150,7 +150,6 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     np.random.seed(_seed)
     random.seed(_seed)
 
-
     if not torch.cuda.is_available():
         device = 'cpu'
 
@@ -184,7 +183,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
 
     def make_generator():
         if data_type == 'synthetic':
-            return GeneratorSynthetic(depth=depth, n_filters=ngf)
+            return GeneratorSynthetic(depth=depth, n_filters=ngf, batch_norm=True)
         else:
             if data_source == 'mnist':
                 return GeneratorDCGAN28(in_features=noise_dim, out_channels=1, n_filters=ngf)
@@ -196,7 +195,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     def make_discriminator():
         batch_norm = loss_type != 'wgan-gp'
         if data_type == 'synthetic':
-            return DiscriminatorSynthetic(depth=depth, n_filters=ndf, batch_norm=batch_norm)
+            return DiscriminatorSynthetic(depth=depth, n_filters=ndf, batch_norm=False)
         else:
             if data_source == 'mnist':
                 return DiscriminatorDCGAN28(in_channels=1, n_filters=ndf, n_targets=1, batch_norm=batch_norm)
@@ -215,10 +214,10 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
         for player in these_players.values():
             player.train()
 
-    averagers = {group: {i: ParamAverager(player) for i, player in these_players.items()}
-                 for group, these_players in players.items()}
+    # averagers = {group: {i: ParamAverager(player) for i, player in these_players.items()}
+    #              for group, these_players in players.items()}
     optimizers = {group: {i: ExtraOptimizer(Adam(player.parameters(),
-                                                 lr=D_lr if group == 'D' else G_lr, betas=(0.5, 0.9)))
+                                                 lr=D_lr if group == 'D' else G_lr, betas=(0., 0.999)))
                           for i, player in these_players.items()}
                   for group, these_players in players.items()}
 
@@ -265,7 +264,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                     for P, player in these_players.items():
                         players[group][P].load_state_dict(checkpoint['players'][group][P])
                         optimizers[group][P].load_state_dict(checkpoint['optimizers'][group][P])
-                        averagers[group][P].load_state_dict(checkpoint['averagers'][group][P])
+                        # averagers[group][P].load_state_dict(checkpoint['averagers'][group][P])
                     log_weights[group] = checkpoint['log_weights'][group]
                     losses[group] = checkpoint['past_losses'][group]
                     counts[group] = checkpoint['count_losses'][group]
@@ -279,7 +278,6 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                 optimizers[group][P].zero_grad()
 
         pairs, use, upd, extrapolate = next(scheduler)
-        # print(pairs, use, upd, extrapolate)
         enable_grad_for(players, upd)
 
         fake_data_dict, true_logits_dict, true_data_dict = {}, {}, {}
@@ -296,7 +294,6 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                     n_noise += 1
                     fake_data_dict[G] = generator(noise)
         for (G, D) in pairs:
-            enable_grad_for(players, {('D', D), ('G', G)})
             if fused_noise:
                 true_data = true_data_dict[D]
                 true_logits = true_logits_dict[D]
@@ -319,11 +316,12 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             # Compute gradients
             for group, adv_group, P, A in [('D', 'G', D, G), ('G', 'D', G, D)]:
                 if (group, P) in upd:
+                    loss = this_loss[group] * torch.exp(log_weights[adv_group][A])
                     enable_grad_for(players, {(group, P), })
-                    loss = this_loss[group] * torch.exp(log_weights[adv_group])[A]
-                    enable_grad_for(players, {(group, P)})
                     # noinspection PyArgumentList
                     loss.backward(retain_graph=True)
+                    enable_grad_for(players)
+
                     losses[group][P, A] += loss.item()
                     counts[group][P, A] += 1
         # Steps
@@ -331,13 +329,12 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             for P, player in these_players.items():
                 if (group, P) in upd:
                     optimizers[group][P].step(extrapolate=extrapolate)
-                    n_steps += 1
                     if group == 'D' and loss_type == 'wgan':
                         for p in player.parameters():
                             p.data.clamp_(-5, 5)
                     if not extrapolate and group == 'G':
                         n_gen_upd += 1
-                        averagers[group][P].step()
+                        # averagers[group][P].step()
 
         if not extrapolate:  # deextrapolate everyone in case of update
             for group, these_optimizers in optimizers.items():
@@ -370,8 +367,8 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             if n_gen_upd >= next_eval_step:
                 next_eval_step += eval_every
 
-                # for G, generator in players['G'].items():
-                #     generator.eval()
+                for G, generator in players['G'].items():
+                    generator.eval()
                 if data_type == 'synthetic':
                     fig, ax = plt.subplots(1, 1)
                     ax.scatter(fixed_data[:, 0], fixed_data[:, 1], label='True', marker='v',
@@ -445,18 +442,18 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                 checkpoint['n_noise'] = n_noise
                 checkpoint['players'] = {}
                 checkpoint['optimizers'] = {}
-                checkpoint['averagers'] = {}
+                # checkpoint['averagers'] = {}
                 checkpoint['log_weights'] = {}
                 checkpoint['past_losses'] = {}
                 checkpoint['count_losses'] = {}
                 for group, these_players in players.items():
                     checkpoint['players'][group] = {}
                     checkpoint['optimizers'][group] = {}
-                    checkpoint['averagers'][group] = {}
+                    # checkpoint['averagers'][group] = {}
                     for P, player in these_players.items():
                         checkpoint['players'][group][P] = players[group][P].state_dict()
                         checkpoint['optimizers'][group][P] = optimizers[group][P].state_dict()
-                        checkpoint['averagers'][group][P] = averagers[group][P].state_dict()
+                        # checkpoint['averagers'][group][P] = averagers[group][P].state_dict()
                     checkpoint['log_weights'][group] = log_weights[group].cpu()
                     checkpoint['past_losses'][group] = losses[group].cpu()
                     checkpoint['count_losses'][group] = counts[group].cpu()
