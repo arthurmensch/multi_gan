@@ -43,8 +43,8 @@ python {workdir}/work/repos/multi_gan/scripts/run_training.py with {parameters} 
 
 workdir = os.environ['WORK']
 script_file = os.path.join(workdir, 'work/repos/multi_gan/run_training.py')
-basedir = os.path.join(workdir, 'output/multi_gan/cifar10_final')
-grid = 'final'
+basedir = os.path.join(workdir, 'output/multi_gan/cifar10_grids')
+grid = 'final_mixed_nash'
 
 if not os.path.exists(basedir):
     os.makedirs(basedir)
@@ -68,30 +68,51 @@ if grid == 'preliminary':
     parameters.append(dict(n_generators=3,
                            n_discriminators=3,
                            mirror_lr=0, sampling='all', fused_noise=False))
-elif grid == 'final':
+elif grid == 'final_mixed_nash':
     i = 0
     parameters = []
     for seed in [100, 200, 300, 400]:
-        for lr in [1e-5, 5e-5]:
-            for nG, nD in [(1, 1,), (5, 1), (5, 2)]:
+        for lr in [3e-5]:
+            for nG, nD in [(1, 1)]:
                 parameters.append(dict(n_generators=nG,
                                        n_discriminators=nD,
                                        D_lr=10 * lr, G_lr=lr,
-                                       mirror_lr=0, sampling='pair',
+                                       mirror_lr=0, sampling='all',
                                        seed=seed))
-            parameters.append(dict(n_generators=5,
-                                   n_discriminators=2,
-                                   D_lr=10 * lr, G_lr=lr,
-                                   mirror_lr=2e-2, sampling='pair', seed=seed))
-            parameters.append(dict(n_generators=5,
-                                   n_discriminators=2,
-                                   D_lr=10 * lr, G_lr=lr,
-                                   mirror_lr=0, sampling='all',
-                                   seed=seed))
-
+            for nG, nD in [(3, 3)]:
+                for mirror_lr in [0., 2e-2]:
+                    parameters.append(dict(n_generators=nG,
+                                           n_discriminators=nD,
+                                           D_lr=10 * lr, G_lr=lr,
+                                           n_iter=5e5 * nG,
+                                           mirror_lr=mirror_lr, sampling='all',
+                                           fused_noise=False,
+                                           seed=seed))
+                    parameters.append(dict(n_generators=nG,
+                                           n_discriminators=nD,
+                                           D_lr=10 * lr, G_lr=lr,
+                                           n_iter=5e5 * nG,
+                                           mirror_lr=mirror_lr, sampling='pair',
+                                           seed=seed))
+elif grid == 'nplayer':
+    i = 0
+    parameters = []
+    for sampling in ['all', 'pair']:
+        for seed in [100, 200, 300, 400]:
+            for lr in [1e-5, 3e-5, 5e-5]:
+                for nG, nD in [(3, 3), (5, 2)]:
+                    if (nG, nD) == (5, 2) and lr != 3e-5:
+                        continue  # Already run
+                    parameters.append(dict(n_generators=nG,
+                                           n_discriminators=nD,
+                                           D_lr=10 * lr, G_lr=lr,
+                                           mirror_lr=0, sampling=sampling,
+                                           seed=seed))
+else:
+    raise ValueError
 
 for i, parameter in enumerate(parameters):
-    output_dir = join(basedir, str(i))
+    output_dir = join(basedir, grid, str(i))
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     job_file = os.path.join(output_dir, "job.slurm")

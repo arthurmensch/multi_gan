@@ -1,7 +1,6 @@
 import csv
 import os
 import random
-import shutil
 from os.path import expanduser, join
 
 import joblib
@@ -9,11 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torchvision.utils as vutils
-from sacred import Experiment
-from torch.optim import Adam
-from torch.utils.data import DataLoader, TensorDataset
-from torch.utils.tensorboard import SummaryWriter
-
 from multi_gan.data import make_8gmm, infinite_iter, make_image_data, make_25gmm
 from multi_gan.eval.fid_score import calculate_fid_given_paths
 from multi_gan.losses import compute_gan_loss, compute_grad_penalty
@@ -21,11 +15,16 @@ from multi_gan.models import GeneratorDCGAN28, DiscriminatorDCGAN28, GeneratorSy
     DiscriminatorSynthetic, DiscriminatorResNet32
 from multi_gan.optimizers import ExtraOptimizer, ParamAverager
 from multi_gan.training import enable_grad_for, Scheduler
+from sacred import Experiment
+from torch.optim import Adam
+from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.tensorboard import SummaryWriter
 
 exp = Experiment('multi_gan')
 exp_dir = expanduser('~/output/multi_gan')
 if not os.path.exists(exp_dir):
     os.makedirs(exp_dir)
+
 
 @exp.config
 def synthetic():
@@ -35,8 +34,11 @@ def synthetic():
     n_generators = 2
     n_discriminators = 2
 
-    ndf = 128 // n_generators
-    ngf = 128 // n_discriminators
+    depth = 1
+
+
+    ndf = 512 // n_generators
+    ngf = 512 // n_discriminators
 
     loss_type = 'wgan-gp'
     device = 'cuda:0'
@@ -51,7 +53,8 @@ def synthetic():
 
     grad_penalty = 10
 
-    sampling = 'player'
+    sampling = 'pair'
+    fused_noise = True
 
     seed = 100
     eval_every = 500
@@ -60,9 +63,7 @@ def synthetic():
     eval_device = 'cuda:0'
     eval_fid = False
     restart = True
-
-    fused_noise = True
-    depth = 1
+    output_dir = expanduser('~/output/multi_gan/synthetic')
 
 
 @exp.named_config
@@ -171,7 +172,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             dataset, sampler = make_25gmm()
         else:
             raise ValueError()
-        dataset.tensors = dataset.tensors.to(device)
+        dataset.tensors = tuple(tensor.to(device) for tensor in dataset.tensors)
         stat_path = None
     elif data_type == 'image':
         dataset, stat_path = make_image_data(data_source)
@@ -221,12 +222,12 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                           for i, player in these_players.items()}
                   for group, these_players in players.items()}
 
-    weights = {'G': torch.full((n_generators,), fill_value=1 / n_generators, device=device),
-               'D': torch.full((n_discriminators,), fill_value=1 / n_discriminators, device=device)}
+    log_weights = {'G': torch.full((n_generators,), fill_value=1 / n_generators, device=device),
+                   'D': torch.full((n_discriminators,), fill_value=1 / n_discriminators, device=device)}
     losses = {'G': torch.zeros((n_generators, n_discriminators), device=device),
-                   'D': torch.zeros((n_discriminators, n_generators), device=device)}
+              'D': torch.zeros((n_discriminators, n_generators), device=device)}
     counts = {'G': torch.zeros((n_generators, n_discriminators), device=device),
-                    'D': torch.zeros((n_discriminators, n_generators), device=device)}
+              'D': torch.zeros((n_discriminators, n_generators), device=device)}
     last_losses = {'G': None, 'D': None}
     fixed_data = next(data_loader)[0].to('cpu')
 
@@ -250,26 +251,26 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             try:
                 checkpoint = torch.load(join(output_dir, name))
                 bundle = joblib.load(join(output_dir, f'{name}_bundle'))
-                break
             except EOFError:
-                print(f'Cannot open {checkpoint}')
+                print(f'Cannot open {name}')
                 continue
-        print(f'Restarting from {join(output_dir, name)}')
-        n_gen_upd = checkpoint['n_gen_upd']
-        n_steps = checkpoint['n_steps']
-        n_data = checkpoint['n_data']
-        n_noise = checkpoint['n_noise']
-        next_print_step = checkpoint['next_print_step']
-        next_eval_step = checkpoint['next_eval_step']
-        for group, these_players in players.items():
-            for P, player in these_players.items():
-                players[group][P].load_state_dict(checkpoint['players'][group][P])
-                optimizers[group][P].load_state_dict(checkpoint['optimizers'][group][P])
-                averagers[group][P].load_state_dict(checkpoint['averagers'][group][P])
-            weights[group] = checkpoint['weights'][group]
-            losses[group] = checkpoint['past_losses'][group]
-            counts[group] = checkpoint['count_losses'][group]
-        scheduler = bundle['scheduler']
+            else:
+                print(f'Restarting from {join(output_dir, name)}')
+                n_gen_upd = checkpoint['n_gen_upd']
+                n_steps = checkpoint['n_steps']
+                n_data = checkpoint['n_data']
+                n_noise = checkpoint['n_noise']
+                next_print_step = checkpoint['next_print_step']
+                next_eval_step = checkpoint['next_eval_step']
+                for group, these_players in players.items():
+                    for P, player in these_players.items():
+                        players[group][P].load_state_dict(checkpoint['players'][group][P])
+                        optimizers[group][P].load_state_dict(checkpoint['optimizers'][group][P])
+                        averagers[group][P].load_state_dict(checkpoint['averagers'][group][P])
+                    log_weights = checkpoint['log_weights'][group]
+                    losses[group] = checkpoint['past_losses'][group]
+                    counts[group] = checkpoint['count_losses'][group]
+                scheduler = bundle['scheduler']
 
     while n_gen_upd < n_iter:
         for group, these_players in players.items():
@@ -318,8 +319,9 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             for group, adv_group, P, A in [('D', 'G', D, G), ('G', 'D', G, D)]:
                 if (group, P) in upd:
                     enable_grad_for(players, {(group, P), })
-                    loss = this_loss[group] * weights[adv_group][A]
+                    loss = this_loss[group] * torch.exp(log_weights[adv_group])[A]
                     enable_grad_for(players, {(group, P)})
+                    # noinspection PyArgumentList
                     loss.backward(retain_graph=True)
                     losses[group][P, A] += loss.item()
                     counts[group][P, A] += 1
@@ -345,8 +347,8 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
         for group in losses:
             if torch.all(counts[group] >= 1):  # will be true or false for both groups
                 sum_losses = torch.sum(losses[group] / counts[group], dim=1)
-                weights[group] *= torch.exp(-mirror_lr * sum_losses)
-                weights[group] /= weights[group].sum()
+                log_weights[group] -= mirror_lr * sum_losses
+                log_weights[group] -= torch.logsumexp(log_weights[group], dim=0)
 
                 last_losses[group] = {str(P): loss for P, loss in enumerate(sum_losses)}
 
@@ -360,8 +362,8 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             for group, these_losses in last_losses.items():
                 if these_losses is not None:
                     metrics[f'training/loss_{group}'] = sum(these_losses.values()).item()
-                    for P, weight in enumerate(weights[group]):
-                        writer.add_scalar(f'weights/{group}{P}', weight, n_gen_upd)
+                    for P, weight in enumerate(log_weights[group]):
+                        writer.add_scalar(f'log_weights/{group}{P}', weight, n_gen_upd)
                 else:
                     metrics[f'training/loss_{group}'] = float('nan')
 
@@ -377,14 +379,15 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                     ax.set_xlim([-1.5, 1.5])
                     ax.set_ylim([-1.5, 1.5])
                     selection = torch.from_numpy(np.random.choice(n_generators, size=fixed_noise.shape[0],
-                                                                  p=weights['G'].cpu().numpy()))
+                                                                  p=torch.exp(log_weights['G']).cpu().numpy()))
                     fake_points = torch.zeros((fixed_noise.shape[0], 2))
                     for G, generator in players['G'].items():
                         with torch.no_grad():
                             mask = selection == G
                             if torch.sum(mask) > 0:
                                 fake_points[selection == G] = generator(fixed_noise[selection == G]).cpu()
-                        ax.scatter(fake_points[selection == G][:, 0], fake_points[selection == G][:, 1], label=G, alpha=.5)
+                        ax.scatter(fake_points[selection == G][:, 0], fake_points[selection == G][:, 1], label=G,
+                                   alpha=.5)
                     ax.legend(loc='lower left')
                     writer.add_figure(f'generated/2d', fig, global_step=n_gen_upd)
                     plt.close(fig)
@@ -401,13 +404,14 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                         writer.add_image(f'generated/{G}', grid, global_step=n_gen_upd)
                     if eval_fid:
                         fake_images = players['G'][0](fixed_noise[:1])  # get shape
-                        dataset = torch.zeros((len(fixed_noise), 3, *fake_images.shape[2:]), dtype=torch.float32)
-                        p = weights['G'].cpu().numpy()
+                        dataset = torch.zeros((fixed_noise.shape[0], 3, *fake_images.shape[2:]), dtype=torch.float32)
+                        p = torch.exp(log_weights['G']).cpu().numpy()
                         bb, be = 0, 0
-                        for (noise, ) in noise_loader:
+                        for (noise,) in noise_loader:
                             G = np.random.choice(n_generators, p=p)
                             be += len(noise)
                             with torch.no_grad():
+                                # noinspection PyUnresolvedReferences
                                 dataset[bb:be, :].copy_(((players['G'][G](noise) + 1) / 2))
                             bb = be
                         dataset = TensorDataset(dataset)
@@ -440,7 +444,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                 checkpoint['players'] = {}
                 checkpoint['optimizers'] = {}
                 checkpoint['averagers'] = {}
-                checkpoint['weights'] = {}
+                checkpoint['log_weights'] = {}
                 checkpoint['past_losses'] = {}
                 checkpoint['count_losses'] = {}
                 for group, these_players in players.items():
@@ -451,7 +455,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                         checkpoint['players'][group][P] = players[group][P].state_dict()
                         checkpoint['optimizers'][group][P] = optimizers[group][P].state_dict()
                         checkpoint['averagers'][group][P] = averagers[group][P].state_dict()
-                    checkpoint['weights'][group] = weights[group].cpu()
+                    checkpoint['log_weights'][group] = log_weights[group].cpu()
                     checkpoint['past_losses'][group] = losses[group].cpu()
                     checkpoint['count_losses'][group] = counts[group].cpu()
                 if os.path.exists('checkpoint'):
