@@ -1,24 +1,30 @@
-import csv
+import os
 import os
 import random
 from os.path import expanduser, join
 
 import joblib
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torchvision.utils as vutils
-from multi_gan.data import make_8gmm, infinite_iter, make_image_data, make_25gmm
-from multi_gan.eval.fid_score import calculate_fid_given_paths
-from multi_gan.losses import compute_gan_loss, compute_grad_penalty
-from multi_gan.models import GeneratorDCGAN28, DiscriminatorDCGAN28, GeneratorSynthetic, GeneratorResNet32, \
-    DiscriminatorSynthetic, DiscriminatorResNet32
-from multi_gan.optimizers import ExtraOptimizer, ParamAverager
-from multi_gan.training import enable_grad_for, Scheduler
+from matplotlib import rc
 from sacred import Experiment
 from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
+
+from multi_gan.data import make_8gmm, infinite_iter, make_image_data, make_25gmm
+from multi_gan.models import GeneratorDCGAN28, DiscriminatorDCGAN28, GeneratorSynthetic, GeneratorResNet32, \
+    DiscriminatorSynthetic, DiscriminatorResNet32
+from multi_gan.optimizers import ExtraOptimizer, ParamAverager
+from multi_gan.training import Scheduler
+
+matplotlib.rcParams['backend'] = 'pdf'
+rc('text', usetex=True)
+
+output_dirs = [expanduser('~/output/multi_gan/cifar10'), expanduser('~/output/multi_gan/cifar10_final'),
+               expanduser('~/output/multi_gan/cifar10_nplayer')]
 
 exp = Experiment('multi_gan')
 exp_dir = expanduser('~/output/multi_gan')
@@ -215,8 +221,9 @@ def plot():
         if i == 5:
             ax = fig.add_subplot(this_grid)
             ax.axis('off')
-            ax.annotate(f'Images from\n'
-                        f'5G 2D WFR', xy=(0.5, .5), xytext=(0, 0), xycoords='axes fraction',
+            ax.annotate(f'Fake CIFAR10\n'
+                        f'WFR flow on\n'
+                        f'5 gen. 2 discr.', xy=(0.5, .5), xytext=(0, 0), xycoords='axes fraction',
                         ha='center', va='center',
                         textcoords='offset points', fontsize=12)
             fig.add_subplot(ax)

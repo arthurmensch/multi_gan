@@ -21,7 +21,8 @@ def compute_gan_loss(true_logits, fake_logits, loss_type='gan'):
 
 def compute_grad_penalty(net_D, true_data, fake_data):
     batch_size = true_data.shape[0]
-    epsilon = true_data.new(batch_size, 1, 1, 1)
+    broadcast = tuple(1 for _ in range(len(true_data.shape[1:])))
+    epsilon = true_data.new(batch_size, *broadcast)
     epsilon = epsilon.uniform_()
     line_data = true_data * (1 - epsilon) + fake_data * (1 - epsilon)
     line_data = Parameter(line_data)

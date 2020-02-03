@@ -1,4 +1,5 @@
 import csv
+import math
 import os
 import random
 from os.path import expanduser, join
@@ -31,29 +32,28 @@ def synthetic():
     data_type = 'synthetic'
     data_source = '8gmm'
 
-    n_generators = 2
-    n_discriminators = 2
+    n_generators = 1
+    n_discriminators = 1
 
     depth = 1
 
+    ndf = 512 // n_discriminators
+    ngf = 512 // n_generators
 
-    ndf = 512 // n_generators
-    ngf = 512 // n_discriminators
-
-    loss_type = 'wgan-gp'
+    loss_type = 'wgan'
     device = 'cuda:0'
-    n_iter = 15000
+    n_iter = 30000
 
-    noise_dim = 32  # For image data
+    noise_dim = 32
 
-    batch_size = 64
-    D_lr = 1e-4
-    G_lr = 1e-5
+    batch_size = 512
+    D_lr = 5e-4
+    G_lr = 5e-5
     mirror_lr = 0
 
     grad_penalty = 10
 
-    sampling = 'pair'
+    sampling = 'all'
     fused_noise = True
 
     seed = 100
@@ -62,8 +62,8 @@ def synthetic():
     print_every = 500
     eval_device = 'cuda:0'
     eval_fid = False
-    restart = True
-    output_dir = expanduser('~/output/multi_gan/synthetic')
+    restart = False
+    output_dir = None
 
 
 @exp.named_config
@@ -150,7 +150,6 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     np.random.seed(_seed)
     random.seed(_seed)
 
-    output_dir = output_dir.replace('$WORK', os.environ['WORK'])
 
     if not torch.cuda.is_available():
         device = 'cpu'
@@ -158,6 +157,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     if output_dir is None:
         output_dir = join(_run.observers[0].dir, 'artifacts')
     else:
+        output_dir = output_dir.replace('$WORK', os.environ['WORK'])
         output_dir = output_dir
 
     if not os.path.exists(output_dir):
@@ -194,10 +194,10 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                 return GeneratorResNet32(n_in=noise_dim, n_out=3, num_filters=ngf)
 
     def make_discriminator():
+        batch_norm = loss_type != 'wgan-gp'
         if data_type == 'synthetic':
-            return DiscriminatorSynthetic(depth=depth, n_filters=ndf)
+            return DiscriminatorSynthetic(depth=depth, n_filters=ndf, batch_norm=batch_norm)
         else:
-            batch_norm = loss_type != 'wgan-gp'
             if data_source == 'mnist':
                 return DiscriminatorDCGAN28(in_channels=1, n_filters=ndf, n_targets=1, batch_norm=batch_norm)
             elif data_source == 'multimnist':
@@ -222,8 +222,8 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                           for i, player in these_players.items()}
                   for group, these_players in players.items()}
 
-    log_weights = {'G': torch.full((n_generators,), fill_value=1 / n_generators, device=device),
-                   'D': torch.full((n_discriminators,), fill_value=1 / n_discriminators, device=device)}
+    log_weights = {'G': torch.full((n_generators,), fill_value=-math.log(n_generators), device=device),
+                   'D': torch.full((n_discriminators,), fill_value=-math.log(n_discriminators), device=device)}
     losses = {'G': torch.zeros((n_generators, n_discriminators), device=device),
               'D': torch.zeros((n_discriminators, n_generators), device=device)}
     counts = {'G': torch.zeros((n_generators, n_discriminators), device=device),
@@ -251,9 +251,8 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             try:
                 checkpoint = torch.load(join(output_dir, name))
                 bundle = joblib.load(join(output_dir, f'{name}_bundle'))
-            except EOFError:
+            except (FileNotFoundError, EOFError):
                 print(f'Cannot open {name}')
-                continue
             else:
                 print(f'Restarting from {join(output_dir, name)}')
                 n_gen_upd = checkpoint['n_gen_upd']
@@ -267,10 +266,11 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                         players[group][P].load_state_dict(checkpoint['players'][group][P])
                         optimizers[group][P].load_state_dict(checkpoint['optimizers'][group][P])
                         averagers[group][P].load_state_dict(checkpoint['averagers'][group][P])
-                    log_weights = checkpoint['log_weights'][group]
+                    log_weights[group] = checkpoint['log_weights'][group]
                     losses[group] = checkpoint['past_losses'][group]
                     counts[group] = checkpoint['count_losses'][group]
                 scheduler = bundle['scheduler']
+                break
 
     while n_gen_upd < n_iter:
         for group, these_players in players.items():
@@ -378,8 +378,9 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                                zorder=1000, alpha=.5)
                     ax.set_xlim([-1.5, 1.5])
                     ax.set_ylim([-1.5, 1.5])
-                    selection = torch.from_numpy(np.random.choice(n_generators, size=fixed_noise.shape[0],
-                                                                  p=torch.exp(log_weights['G']).cpu().numpy()))
+                    p = torch.exp(log_weights['G']).cpu().numpy()
+                    p /= np.sum(p)
+                    selection = torch.from_numpy(np.random.choice(n_generators, size=fixed_noise.shape[0], p=p))
                     fake_points = torch.zeros((fixed_noise.shape[0], 2))
                     for G, generator in players['G'].items():
                         with torch.no_grad():
@@ -406,6 +407,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                         fake_images = players['G'][0](fixed_noise[:1])  # get shape
                         dataset = torch.zeros((fixed_noise.shape[0], 3, *fake_images.shape[2:]), dtype=torch.float32)
                         p = torch.exp(log_weights['G']).cpu().numpy()
+                        p /= np.sum(p)
                         bb, be = 0, 0
                         for (noise,) in noise_loader:
                             G = np.random.choice(n_generators, p=p)
