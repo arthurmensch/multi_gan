@@ -49,11 +49,14 @@ def synthetic():
     batch_size = 512
     D_lr = 1e-3
     G_lr = 1e-4
-    mirror_lr = 0
+    mirror_lr = 1e-1
+
+    beta1 = 0.
+    beta2 = 0.999
 
     grad_penalty = 10
 
-    sampling = 'all_extra_alter'
+    sampling = 'all_extra_alternated'
     fused_noise = True
 
     seed = 100
@@ -88,6 +91,9 @@ def cifar():
     G_lr = 3e-5
     mirror_lr = 0
 
+    beta1 = 0.5
+    beta2 = 0.9
+
     grad_penalty = 10
 
     sampling = 'all_alternated'
@@ -101,7 +107,7 @@ def cifar():
     eval_device = 'cuda:0'
 
     restart = True
-    output_dir = expanduser('~/output')
+    output_dir = None
 
 
 @exp.named_config
@@ -117,38 +123,42 @@ def mnist():
 
     loss_type = 'wgan-gp'
     device = 'cuda:0'
-    n_iter = int(5e4)
+    n_iter = int(5e5)
 
     noise_dim = 128  # For image data
 
     batch_size = 64
-    D_lr = 1e-3
-    G_lr = 1e-4
+    D_lr = 3e-4
+    G_lr = 3e-5
     mirror_lr = 0
+
+    beta1 = 0.5
+    beta2 = 0.9
 
     grad_penalty = 10
 
-    sampling = 'all'
+    sampling = 'all_alternated'
     fused_noise = True
 
     seed = 0
 
     eval_fid = True
-    print_every = 100
-    eval_every = 100
+    print_every = 10000
+    eval_every = 10000
     eval_device = 'cuda:0'
 
     restart = True
-    output_dir = expanduser('~/output/multi_gan/mnist')
+    output_dir = None
 
 
 @exp.main
 def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sampling, mirror_lr, restart,
           output_dir, data_type, data_source, depth, print_every, eval_device, eval_fid, fused_noise,
+          beta1, beta2,
           device, batch_size, n_iter, loss_type, eval_every, D_lr, G_lr, _seed, _run):
-    torch.random.manual_seed(_seed)
-    np.random.seed(_seed)
-    random.seed(_seed)
+    torch.random.manual_seed(0)
+    np.random.seed(0)
+    random.seed(0)
 
     if not torch.cuda.is_available():
         device = 'cpu'
@@ -178,6 +188,11 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
         sampler = None
     else:
         raise ValueError()
+
+    torch.random.manual_seed(_seed)
+    np.random.seed(_seed)
+    random.seed(_seed)
+
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     data_loader = infinite_iter(data_loader)
 
@@ -217,7 +232,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     # averagers = {group: {i: ParamAverager(player) for i, player in these_players.items()}
     #              for group, these_players in players.items()}
     optimizers = {group: {i: ExtraOptimizer(Adam(player.parameters(),
-                                                 lr=D_lr if group == 'D' else G_lr, betas=(0., 0.999)))
+                                                 lr=D_lr if group == 'D' else G_lr, betas=(beta1, beta2)))
                           for i, player in these_players.items()}
                   for group, these_players in players.items()}
 
@@ -329,6 +344,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
             for P, player in these_players.items():
                 if (group, P) in upd:
                     optimizers[group][P].step(extrapolate=extrapolate)
+                    n_steps += 1
                     if group == 'D' and loss_type == 'wgan':
                         for p in player.parameters():
                             p.data.clamp_(-5, 5)
@@ -354,13 +370,17 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
 
         if n_gen_upd >= next_print_step:
             next_print_step += print_every
-            metrics = {}
+            metrics = {'steps/n_gen_upd': n_gen_upd,
+                       'steps/n_data': n_data,
+                       'steps/n_noise': n_noise,
+                       'steps/n_steps': n_steps,
+                       }
             string = f'{n_gen_upd} G_upd / {n_steps} steps / {n_noise} noise / {n_data} data '
             for group, these_losses in last_losses.items():
                 if these_losses is not None:
                     metrics[f'training/loss_{group}'] = sum(these_losses.values()).item()
-                    for P, weight in enumerate(log_weights[group]):
-                        writer.add_scalar(f'log_weights/{group}{P}', weight, n_gen_upd)
+                    for P, weight in enumerate(torch.exp(log_weights[group])):
+                        writer.add_scalar(f'weights/{group}{P}', weight, n_gen_upd)
                 else:
                     metrics[f'training/loss_{group}'] = float('nan')
 

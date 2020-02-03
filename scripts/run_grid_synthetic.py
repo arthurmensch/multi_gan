@@ -43,69 +43,51 @@ python {workdir}/work/repos/multi_gan/scripts/run_training.py with {parameters} 
 
 workdir = os.environ['WORK']
 script_file = os.path.join(workdir, 'work/repos/multi_gan/run_training.py')
-basedir = os.path.join(workdir, 'output/multi_gan/cifar10_grids')
-grid = 'final_mixed_nash'
+basedir = os.path.join(workdir, 'output/multi_gan/synthetic')
+grid = 'final_mixed_nash_2'
 
 if not os.path.exists(basedir):
     os.makedirs(basedir)
 
-if grid == 'preliminary':
-    i = 0
-    parameters = []
-    for n_generators in [1, 3, 5]:
-        for n_discriminators in [1, 3]:
-            for sampling in ['all', 'pair']:
-                parameters.append(dict(n_generators=n_generators,
-                                       n_discriminators=n_discriminators,
-                                       mirror_lr=0, sampling=sampling))
-                if n_generators > 1 or n_generators > 1 and sampling == 'all':
-                    parameters.append(dict(n_generators=n_generators,
-                                           n_discriminators=n_discriminators,
-                                           mirror_lr=1e-2, sampling=sampling))
-    parameters.append(dict(n_generators=4, noise_dim=32,
-                           n_discriminators=1,
-                           mirror_lr=0, sampling='all'))
-    parameters.append(dict(n_generators=3,
-                           n_discriminators=3,
-                           mirror_lr=0, sampling='all', fused_noise=False))
-elif grid == 'final_mixed_nash':
+if grid == 'final_mixed_nash':
     i = 0
     parameters = []
     for seed in [100, 200, 300, 400]:
-        for lr in [3e-5]:
+        for lr in [1e-4]:
             for nG, nD in [(1, 1)]:
                 parameters.append(dict(n_generators=nG,
                                        n_discriminators=nD,
                                        D_lr=10 * lr, G_lr=lr,
                                        mirror_lr=0, sampling='all_extra',
                                        seed=seed))
-            for nG, nD in [(3, 3)]:
-                for mirror_lr in [0., 2e-2]:
+            for nG, nD in [(3, 3), (5, 5)]:
+                for mirror_lr in [0., 1e-1]:
                     parameters.append(dict(n_generators=nG,
                                            n_discriminators=nD,
                                            D_lr=10 * lr, G_lr=lr,
-                                           n_iter=5e5 * nG,
                                            mirror_lr=mirror_lr, sampling='all_extra',
                                            seed=seed))
                     parameters.append(dict(n_generators=nG,
                                            n_discriminators=nD,
                                            D_lr=10 * lr, G_lr=lr,
-                                           n_iter=5e5 * nG,
                                            mirror_lr=mirror_lr, sampling='pair_extra',
                                            seed=seed))
-elif grid == 'nplayer':
+elif grid == 'final_mixed_nash_2':
     i = 0
     parameters = []
-    for sampling in ['all', 'pair']:
-        for seed in [100, 200, 300, 400]:
-            for lr in [1e-5, 3e-5, 5e-5]:
-                for nG, nD in [(3, 3), (5, 2)]:
-                    if (nG, nD) == (5, 2) and lr != 3e-5:
-                        continue  # Already run
+    for seed in [100, 200, 300, 400]:
+        for lr in [1e-4]:
+            for nG, nD in [(3, 3), (5, 5)]:
+                for mirror_lr in [1e-2]:
                     parameters.append(dict(n_generators=nG,
                                            n_discriminators=nD,
                                            D_lr=10 * lr, G_lr=lr,
-                                           mirror_lr=0, sampling=sampling,
+                                           mirror_lr=mirror_lr, sampling='all_extra',
+                                           seed=seed))
+                    parameters.append(dict(n_generators=nG,
+                                           n_discriminators=nD,
+                                           D_lr=10 * lr, G_lr=lr,
+                                           mirror_lr=mirror_lr, sampling='pair_extra',
                                            seed=seed))
 else:
     raise ValueError
@@ -115,12 +97,13 @@ for i, parameter in enumerate(parameters):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     job_file = os.path.join(output_dir, "job.slurm")
-    parameters_str = 'cifar output_dir={} '.format(output_dir)
+    parameters_str = 'output_dir={} '.format(output_dir)
     for key in parameter:
         parameters_str += "{}={} ".format(key, parameter[key])
     template = SLURM_TEMPLATE.format(parameters=parameters_str, job_file=job_file, output_dir=output_dir,
                                      workdir=workdir)
     with open(job_file, 'w+') as f:
+        # print(job_file)
         f.writelines(template)
     i += 1
     os.system("sbatch %s" % job_file)
