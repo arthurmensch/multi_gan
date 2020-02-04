@@ -44,7 +44,7 @@ python {workdir}/work/repos/multi_gan/scripts/run_training.py with {parameters} 
 workdir = os.environ['WORK']
 script_file = os.path.join(workdir, 'work/repos/multi_gan/run_training.py')
 basedir = os.path.join(workdir, 'output/multi_gan/synthetic')
-grid = 'final_mixed_nash_2'
+grid = 'final_mixed_nash_6'
 
 if not os.path.exists(basedir):
     os.makedirs(basedir)
@@ -72,12 +72,12 @@ if grid == 'final_mixed_nash':
                                            D_lr=10 * lr, G_lr=lr,
                                            mirror_lr=mirror_lr, sampling='pair_extra',
                                            seed=seed))
-elif grid == 'final_mixed_nash_2':
+elif grid == 'final_mixed_nash_3':
     i = 0
     parameters = []
     for seed in [100, 200, 300, 400]:
         for lr in [1e-4]:
-            for nG, nD in [(3, 3), (5, 5)]:
+            for nG, nD in [(3, 1), (5, 1)]:
                 for mirror_lr in [1e-2]:
                     parameters.append(dict(n_generators=nG,
                                            n_discriminators=nD,
@@ -88,6 +88,34 @@ elif grid == 'final_mixed_nash_2':
                                            n_discriminators=nD,
                                            D_lr=10 * lr, G_lr=lr,
                                            mirror_lr=mirror_lr, sampling='pair_extra',
+                                           seed=seed))
+elif grid == 'final_mixed_nash_6':
+    i = 0
+    parameters = []
+    for seed in [100, 200, 300, 400]:
+        for lr in [1e-4]:
+            for nG, nD in [(1, 1)]:
+                parameters.append(dict(n_generators=nG,
+                                       n_discriminators=nD,
+                                       D_lr=10 * lr, G_lr=lr,
+                                       mirror_lr=0, sampling='all_extra',
+                                       depth=1,
+                                       seed=seed))
+            for nG, nD in [(3, 3), (5, 5)]:
+                for mirror_lr in [0., 1e-2]:
+                    parameters.append(dict(n_generators=nG,
+                                           n_discriminators=nD,
+                                           D_lr=10 * lr, G_lr=lr,
+                                           n_iter=30000 * nG,
+                                           mirror_lr=mirror_lr, sampling='all_extra',
+                                           depth=1,
+                                           seed=seed))
+                    parameters.append(dict(n_generators=nG,
+                                           n_discriminators=nD,
+                                           D_lr=10 * lr, G_lr=lr,
+                                           n_iter=30000 * nG,
+                                           mirror_lr=mirror_lr, sampling='pair_extra',
+                                           depth=1,
                                            seed=seed))
 else:
     raise ValueError

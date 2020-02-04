@@ -35,7 +35,7 @@ def synthetic():
     n_generators = 5
     n_discriminators = 5
 
-    depth = 1
+    depth = 3
 
     ndf = 512
     ngf = 512
@@ -117,7 +117,7 @@ def mnist():
     n_generators = 3
     n_discriminators = 3
 
-    depth = 1
+    depth = 3
     ndf = 128
     ngf = 128
 
@@ -189,10 +189,13 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     else:
         raise ValueError()
 
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    data_loader = infinite_iter(data_loader)
+    fixed_data = next(data_loader)[0].to('cpu')
+
     torch.random.manual_seed(_seed)
     np.random.seed(_seed)
     random.seed(_seed)
-
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     data_loader = infinite_iter(data_loader)
 
@@ -243,7 +246,6 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
     counts = {'G': torch.zeros((n_generators, n_discriminators), device=device),
               'D': torch.zeros((n_discriminators, n_generators), device=device)}
     last_losses = {'G': None, 'D': None}
-    fixed_data = next(data_loader)[0].to('cpu')
 
     if data_type == 'synthetic':
         fixed_noise = torch.randn(512, noise_dim).to(device)
@@ -409,7 +411,7 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
                     ax.legend(loc='lower left')
                     writer.add_figure(f'generated/2d', fig, global_step=n_gen_upd)
                     plt.close(fig)
-                    metrics['eval/log_prob'] = true_loglike - sampler.log_prob(fake_points).mean().item()
+                    metrics['eval/log_prob'] = sampler.log_prob(fake_points).mean().item()
 
                 else:  # data_type == 'image'
                     for G, generator in players['G'].items():
