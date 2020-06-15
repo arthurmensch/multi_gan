@@ -9,6 +9,7 @@ from pandas.errors import EmptyDataError
 
 import matplotlib
 from matplotlib import rc
+
 matplotlib.rcParams['backend'] = 'pdf'
 rc('text', usetex=True)
 
@@ -85,14 +86,15 @@ linestyles = {1e-5: '-', 3e-5: '--', 5e-5: ':'}
 updates_handles, updates_labels, lr_handles, lr_labels = [], [], [], []
 for (_, _, lr, updates), sub_df in all_results.groupby(by=['n_generators', 'n_discriminators', 'lr', 'updates']):
     lines, = ax.plot(sub_df['total_iter'], sub_df['fid_mean'], label=labels[updates], color=colors[updates],
-            linestyle=linestyles[lr])
+                     linestyle=linestyles[lr])
     if lr == 1e-5:
         updates_handles.append(lines)
         updates_labels.append(labels[updates])
     if updates == 'pair':
         lr_handles.append(lines)
         lr_labels.append(lr_labels_dict[lr])
-    ax.fill_between(sub_df['total_iter'], sub_df['fid_mean-std'], sub_df['fid_mean+std'], color=colors[updates], alpha=0.5)
+    ax.fill_between(sub_df['total_iter'], sub_df['fid_mean-std'], sub_df['fid_mean+std'], color=colors[updates],
+                    alpha=0.5)
 # ax.set_xlabel('Generator updates')
 # ax.set_ylabel('FID (10k)')
 ax.set_ylim([25, 150])
@@ -103,10 +105,10 @@ legend1 = plt.legend(updates_handles, updates_labels, frameon=False,
 legend2 = plt.legend(lr_handles, lr_labels, frameon=False, fontsize=7, ncol=1, labelspacing=0., handlelength=1.5,
                      bbox_to_anchor=(1.1, 0.5), loc='center right')
 ax.annotate('G. iter', xy=(0, 0), xytext=(-2, -7), textcoords='offset points',
-                 xycoords='axes fraction', ha='right', va='top', fontsize=10)
+            xycoords='axes fraction', ha='right', va='top', fontsize=10)
 ax.annotate('FID', xy=(0, 1), xytext=(-3, -3), textcoords='offset points',
-                 xycoords='axes fraction', ha='right', va='bottom', fontsize=10)
-ax.annotate('LR', xy=(.7, .5), xytext=(-10,-1), xycoords='axes fraction', textcoords='offset points',
+            xycoords='axes fraction', ha='right', va='bottom', fontsize=10)
+ax.annotate('LR', xy=(.7, .5), xytext=(-10, -1), xycoords='axes fraction', textcoords='offset points',
             fontsize=8, ha='center')
 ax.add_artist(legend1)
 # ax.add_artist(legend2)

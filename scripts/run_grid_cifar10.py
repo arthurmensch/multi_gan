@@ -43,8 +43,8 @@ python {workdir}/work/repos/multi_gan/scripts/run_training.py with {parameters} 
 
 workdir = os.environ['WORK']
 script_file = os.path.join(workdir, 'work/repos/multi_gan/run_training.py')
-basedir = os.path.join(workdir, 'output/multi_gan/cifar10/grids')
-grid = 'final_mixed_nash'
+basedir = os.path.join(workdir, 'output/multi_gan/cifar10')
+grid = 'final_mixed_nash_4'
 
 if not os.path.exists(basedir):
     os.makedirs(basedir)
@@ -68,7 +68,7 @@ if grid == 'preliminary':
     parameters.append(dict(n_generators=3,
                            n_discriminators=3,
                            mirror_lr=0, sampling='all', fused_noise=False))
-elif grid == 'final_mixed_nash':
+elif grid == 'final_mixed_nash_4':
     i = 0
     parameters = []
     for seed in [100, 200, 300, 400]:
@@ -79,32 +79,7 @@ elif grid == 'final_mixed_nash':
                                        D_lr=10 * lr, G_lr=lr,
                                        mirror_lr=0, sampling='all_extra',
                                        seed=seed))
-            for nG, nD in [(3, 3)]:
-                for mirror_lr in [0., 2e-2]:
-                    parameters.append(dict(n_generators=nG,
-                                           n_discriminators=nD,
-                                           D_lr=10 * lr, G_lr=lr,
-                                           n_iter=5e5 * nG,
-                                           mirror_lr=mirror_lr, sampling='all_extra',
-                                           seed=seed))
-                    parameters.append(dict(n_generators=nG,
-                                           n_discriminators=nD,
-                                           D_lr=10 * lr, G_lr=lr,
-                                           n_iter=5e5 * nG,
-                                           mirror_lr=mirror_lr, sampling='pair_extra',
-                                           seed=seed))
-elif grid == 'final_synthetic':
-    i = 0
-    parameters = []
-    for seed in [100, 200, 300, 400]:
-        for lr in [3e-5]:
-            for nG, nD in [(1, 1)]:
-                parameters.append(dict(n_generators=nG,
-                                       n_discriminators=nD,
-                                       D_lr=10 * lr, G_lr=lr,
-                                       mirror_lr=0, sampling='all_extra',
-                                       seed=seed))
-            for nG, nD in [(3, 3)]:
+            for nG, nD in [(3, 3), (5, 3)]:
                 for mirror_lr in [0., 2e-2]:
                     parameters.append(dict(n_generators=nG,
                                            n_discriminators=nD,
