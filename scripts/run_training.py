@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torchvision.utils as vutils
+from sacred.observers import FileStorageObserver
+
 from multi_gan.data import make_8gmm, infinite_iter, make_image_data, make_25gmm
 from multi_gan.eval.fid_score import calculate_fid_given_paths
 from multi_gan.losses import compute_gan_loss, compute_grad_penalty
@@ -22,6 +24,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
 exp = Experiment('multi_gan')
+
 exp_dir = expanduser('~/output/multi_gan')
 if not os.path.exists(exp_dir):
     os.makedirs(exp_dir)
@@ -489,4 +492,5 @@ def train(n_generators, n_discriminators, noise_dim, ngf, ndf, grad_penalty, sam
 
 
 if __name__ == '__main__':
+    exp.observers = [FileStorageObserver(exp_dir)]
     exp.run_commandline()
