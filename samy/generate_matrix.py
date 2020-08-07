@@ -21,7 +21,8 @@ def generate_matrix(theta1, theta2, tau):
 
     return A
 
-A = generate_matrix(0.7, 0.3, 0.9)
+A = generate_matrix(0.7, 0.3, 0.0)
 v, w = linalg.eig(A)
 print(v)
+print(w * np.sqrt(2))
 print((w @ w.conj().T).real)
