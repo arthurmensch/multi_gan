@@ -7,31 +7,49 @@ import pandas as pd
 import seaborn as sns
 import torch
 import torch.nn as nn
-from multi_gan.optimizers import ExtraOptimizer
+from multi_gan.optimizers import ExtraOptimizer, SignSGD
 from torch.nn import Parameter
 from torch.optim import Adam, SGD
 
+def make_rotation(theta):
+    theta *= 2 * np.pi
+    R =  torch.tensor(
+        [[np.cos(theta), np.sin(theta)],
+         [- np.sin(theta), np.cos(theta)]]
+    ).float()
+    D = torch.tensor(
+        [[1, 0.4],
+         [0, 1]]
+    ).float()
+    res = D @ R @ torch.inverse(D)
+    return res
+
+
 
 class Game(nn.Module):
-    def __init__(self):
+    def __init__(self, theta=0.25):
         super(Game, self).__init__()
+        self.rotation = make_rotation(theta)
 
     def forward(self, x, y):
-        return x * y.detach(), -x.detach() * y
+        s = torch.cat([x, y])
+        payoffs = s * (self.rotation @ s)
+        return payoffs[0], payoffs[1]
+
 
 output_dir = '.'
 
 
-def optimize(extrapolate=True, optimizer='sgd'):
+def optimize(extrapolate=True, optimizer='sgd', theta=0.25):
     x = Parameter(torch.ones(1))
     y = Parameter(torch.ones(1))
-    g = Game()
+    g = Game(theta)
 
     def make_optimizer(params, optimizer):
         if optimizer == 'sgd':
-            return SGD(params, lr=1e-1, )
+            return SGD(params, lr=1e-3, )
         else:
-            return Adam(params, lr=1e-2, betas=(0.,0.9), amsgrad=False)
+            return SignSGD(params, lr=1e-3, use_l1=False)
     opt_x = ExtraOptimizer(make_optimizer([x], optimizer))
     opt_y = ExtraOptimizer(make_optimizer([y], optimizer))
     trace = []
@@ -41,8 +59,8 @@ def optimize(extrapolate=True, optimizer='sgd'):
         opt_x.zero_grad()
         opt_y.zero_grad()
         lx, ly = g(x, y)
-        lx.backward()
-        ly.backward()
+        x.grad = torch.autograd.grad(lx, (x,), retain_graph=True)[0].detach()
+        y.grad = torch.autograd.grad(ly, (y,))[0].detach()
         if extrapolate:
             opt_x.step(extrapolate=i % 2)
             opt_y.step(extrapolate=i % 2)
@@ -51,21 +69,21 @@ def optimize(extrapolate=True, optimizer='sgd'):
             opt_y.step()
     return pd.DataFrame(trace)
 
-def compute():
-    sgd = optimize(extrapolate=False)
-    extra_sgd = optimize(extrapolate=True)
-    adam = optimize(extrapolate=False, optimizer='adam')
-    extra_adam = optimize(optimizer='adam')
+def compute(theta=0.25):
+    sgd = optimize(extrapolate=False, theta=theta)
+    extra_sgd = optimize(extrapolate=True, theta=theta)
+    adam = optimize(extrapolate=False, optimizer='adam', theta=theta)
+    extra_adam = optimize(optimizer='adam', theta=theta)
     results = pd.concat([sgd, extra_sgd, adam, extra_adam], keys=['sgd', 'extra_sgd',
-                                                                  'adam', 'extra_adam'], names=['method'])
+                                                                  'signGD', 'extra_signGD'], names=['method'])
     results.to_pickle(join(output_dir, 'records.pkl'))
 
-def plot():
+def plot(theta):
     df = pd.read_pickle(join(output_dir, 'records.pkl'))
 
     X, Y = torch.meshgrid(torch.linspace(-2.5, 2.5, 20), torch.linspace(-2.5, 2.5, 20))
 
-    g = Game()
+    g = Game(theta)
 
     def get_vector_field(X, Y):
         gX, gY = torch.zeros_like(X), torch.zeros_like(Y)
@@ -74,13 +92,13 @@ def plot():
                 x = Parameter(X[i, [j]])
                 y = Parameter(Y[i, [j]])
                 lx, ly = g(x, y)
-                gX[i, j] = torch.autograd.grad(lx, (x,))[0]
+                gX[i, j] = torch.autograd.grad(lx, (x,), retain_graph=True)[0]
                 gY[i, j] = torch.autograd.grad(ly, (y,))[0]
         return gX.detach(), gY.detach()
 
     gX, gY = get_vector_field(X, Y)
 
-    scale = 50
+    scale = 25
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(297.48499 / scale, 100 / scale), constrained_layout=False)
     plt.subplots_adjust(left=0., right=0.98, top=0.98, bottom=0.12, wspace=0.33)
     ax1.quiver(X, Y, -gX * 3, -gY * 3, width=3e-3, color='.5')
@@ -106,12 +124,12 @@ def plot():
     ax2.set_yscale('log')
     ax2.set_xscale('log')
     ax1.axis('off')
-    ax2.set_xlim(1e3, 2e4)
-    ax2.set_ylim(1e-7, 2)
+    # ax2.set_xlim(1e3, 2e4)
+    # ax2.set_ylim(1e-7, 2)
     sns.despine(fig, [ax2])
     plt.savefig(join(output_dir, 'figure.pdf'), transparent=True)
     plt.show()
 
-
-compute()
-plot()
+theta = 0.25
+compute(theta)
+plot(theta)
