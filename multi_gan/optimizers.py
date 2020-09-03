@@ -250,10 +250,9 @@ class SignSGD(Optimizer):
                         d_p = d_p.add(buf, alpha=momentum)
                     else:
                         d_p = buf
-                alpha = - group['lr']
-                if group['use_l1']:
-                    alpha *= torch.abs(d_p).sum()
                 d_p = torch.sign(d_p)
-                p.add_(d_p, alpha=alpha)
+                if group['use_l1']:
+                    d_p *= torch.abs(d_p).sum()
+                p.add_(d_p, alpha=- group['lr'])
 
         return loss

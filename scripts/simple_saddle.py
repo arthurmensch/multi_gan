@@ -18,10 +18,12 @@ def make_rotation(theta):
          [- np.sin(theta), np.cos(theta)]]
     ).float()
     D = torch.tensor(
-        [[1, 0.4],
+        [[1, 1],
          [0, 1]]
     ).float()
     res = D @ R @ torch.inverse(D)
+    res[0, 0] /= 2
+    res[1, 1] /= 2
     return res
 
 
@@ -42,7 +44,7 @@ output_dir = '.'
 
 def optimize(extrapolate=True, optimizer='sgd', theta=0.25):
     x = Parameter(torch.ones(1))
-    y = Parameter(torch.ones(1))
+    y = Parameter(torch.ones(1) * 2)
     g = Game(theta)
 
     def make_optimizer(params, optimizer):
@@ -53,7 +55,7 @@ def optimize(extrapolate=True, optimizer='sgd', theta=0.25):
     opt_x = ExtraOptimizer(make_optimizer([x], optimizer))
     opt_y = ExtraOptimizer(make_optimizer([y], optimizer))
     trace = []
-    for i in range(10000):
+    for i in range(5000):
         distance = (x ** 2 + y ** 2).item()
         trace.append(dict(x=x.item(), y=y.item(), c=i * 2, distance=distance))
         opt_x.zero_grad()
@@ -130,6 +132,6 @@ def plot(theta):
     plt.savefig(join(output_dir, 'figure.pdf'), transparent=True)
     plt.show()
 
-theta = 0.25
+theta = 0.24
 compute(theta)
 plot(theta)
