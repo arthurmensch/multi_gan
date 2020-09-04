@@ -2,10 +2,11 @@ import math
 
 import numpy as np
 import numpy.linalg as linalg
+from numba import jit
 from numpy.testing import assert_allclose
 from scipy.sparse import diags
 
-
+@jit
 def make_rotation(theta):
     theta *= 2 * np.pi
     return np.array(
@@ -52,15 +53,16 @@ def generate_traj(x0, eta, n_iter, theta):
         xs.append(x)
     return xs
 
-def make_skewed_rotation(theta, skew):
+def make_skewed_rotation(theta, shear):
     theta *= 2 * np.pi
     R = np.array(
         [[np.cos(theta), np.sin(theta)],
-         [- np.sin(theta), np.cos(theta)]]
+         [- np.sin(theta), np.cos(theta)]],
+        dtype=np.float64
     )
     D = np.array(
-        [[1, skew],
-         [0, 1]]
+        [[1., shear],
+         [0, 1]], dtype=np.float64
     )
     res = D @ R @ linalg.inv(D)
     return res
